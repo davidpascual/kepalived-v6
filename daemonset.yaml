@@ -1,0 +1,155 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: keepalived-v6
+
+# kind: ServiceAccount
+# apiVersion: v1
+# metadata:
+#  name: cluster-hosted-handler
+#  namespace: {{ .HandlerNamespace }}  
+
+
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: master-cluster-hosted-keepalived
+  namespace: keepalived-v6
+  labels:
+    app: cluster-hosted
+    component:  cluster-hosted-keepalived
+spec:
+  selector:
+    matchLabels:
+      name: master-cluster-hosted-keepalived
+  template:
+    metadata:
+      labels:
+        app: cluster-hosted
+        component: cluster-hosted-keepalived
+        name: master-cluster-hosted-keepalived
+    spec:
+      nodeSelector:
+        node-role.kubernetes.io/master: ""
+      tolerations:
+      - key: "node-role.kubernetes.io/master"
+        operator: "Exists"
+        effect: "NoSchedule"
+      hostNetwork: true
+      serviceAccountName: cluster-hosted-handler
+      volumes:
+      - name: conf-dir
+        configMap:
+          name: keepalived-template
+          items:
+          - key: "master-keepalived.conf.tmpl"
+            path: "master-keepalived.conf.tmpl"
+#      - name: kubeconfig
+#        hostPath:
+#          path: /etc/kubernetes
+#      - name: kubeconfigvarlib
+#        hostPath:
+#          path: /var/lib/kubelet
+      - name: run-dir
+        empty-dir: {}
+#      - name: script-dir
+#        empty-dir: {}
+      - name: chroot-host
+        hostPath:
+          path: /
+      containers:
+      - name: keepalivedv6
+        securityContext:
+        #  privileged: true
+        # TODO: Get the image from the default keepalived pod manifest
+        image: quay.io/openshift-release-dev/ocp-v4.0-art-dev@sha256:24dbf54c5e8b6a714598b4f81b0cdcfe5b9c2be99f30dfc79a495d62b64f81cf
+        env:
+          - name: NSS_SDB_USE_CACHE
+            value: "no"
+        command:
+        - /bin/bash
+        - -c
+        - |
+          #/bin/bash
+          sigterm_handler()
+          {
+            if pid=$(pgrep -o keepalived); then
+              kill -s SIGTERM "$pid"
+            fi
+          }
+          reload_keepalived()
+          {
+            if pid=$(pgrep -o keepalived); then
+                kill -s SIGHUP "$pid"
+            else
+                /usr/sbin/keepalived -f /etc/keepalived/keepalived-v6.conf --dont-fork --vrrp --log-detail --log-console &
+            fi
+          }
+          msg_handler()
+          {
+            while read -r line; do
+              echo "The client sent: $line" >&2
+              # currently only 'reload' msg is supported
+              if [ "$line" = reload ]; then
+                  reload_keepalived
+              fi
+            done
+          }
+          remove_vip()
+          {
+            address=$1
+            interface=$(ip -o a | awk "/\s${address}\// {print \$2}")
+            cidr=$(ip -o a | awk "/\s${address}\// {print \$4}")
+            if [ -n "$interface" ]; then
+                ip a del $cidr dev $interface
+            fi
+          }
+          set -ex
+          # Ensure that we don't have stale VIPs configured
+          # See https://bugzilla.redhat.com/show_bug.cgi?id=1931505
+          # TODO: Replace with VIPs
+          remove_vip "fd2e:6f44:5dd8:c956::5"
+          remove_vip "fd2e:6f44:5dd8:c956::4"
+          declare -r keepalived_sock="/var/run/keepalived/keepalived.sock"
+          export -f msg_handler
+          export -f reload_keepalived
+          export -f sigterm_handler
+          # Create iptables rule to loadbalance traffic coming in on VIP
+          ip6tables -A PREROUTING  -t nat --dst fd2e:6f44:5dd8:c956::5 -p tcp --dport 6443 -j REDIRECT --to-ports 9445 -m comment --comment OCP_API_LB_REDIRECT
+          ip6tables -A OUTPUT -t nat --dst fd2e:6f44:5dd8:c956::5 -p tcp --dport 6443 -j REDIRECT --to-ports 9445 -m comment --comment OCP_API_LB_REDIRECT -o lo
+          trap sigterm_handler SIGTERM
+          if [ -s "/etc/keepalived/keepalived-v6.conf" ]; then
+              /usr/sbin/keepalived -f /etc/keepalived/keepalived-v6.conf --dont-fork --vrrp --log-detail --log-console &
+          fi
+          rm -f "$keepalived_sock"
+          socat UNIX-LISTEN:${keepalived_sock},fork system:'bash -c msg_handler'
+        resources:
+          requests:
+            cpu: 100m
+            memory: 200Mi
+        volumeMounts:
+        - name: conf-dir
+          mountPath: /etc/keepalived/keepalived-v6.conf
+          subPath: master-keepalived.conf.tmpl
+
+#        - name: conf-dir
+#          mountPath: "/etc/keepalived"
+        - name: run-dir
+          mountPath: "/var/run/keepalived"
+#        - name: chroot-host
+#          mountPath: "/host"
+#        - name: kubeconfigvarlib
+#          mountPath: "/var/lib/kubelet"
+        livenessProbe:
+          exec:
+            command:
+            - /bin/bash
+            - -c
+            - |
+              [ ! -s "/etc/keepalived/keepalived-v6.conf" ] || (echo "State = FAULT" > /tmp/keepalived.data && kill -s SIGUSR1 "$(pgrep -o keepalived)" && for i in $(seq 5); do grep -q "State = FAULT" /tmp/keepalived.data && sleep 1 || exit 0; done && exit 1)
+          initialDelaySeconds: 20
+          timeoutSeconds: 5
+        terminationMessagePolicy: FallbackToLogsOnError
+        imagePullPolicy: IfNotPresent

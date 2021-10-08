@@ -1,0 +1,24 @@
+---
+kind: ServiceAccount
+apiVersion: v1
+metadata:
+  name: cluster-hosted-handler
+  namespace: keepalived-v6
+---
+apiVersion: security.openshift.io/v1
+kind: SecurityContextConstraints
+metadata:
+  name: cluster-hosted-handler
+allowPrivilegedContainer: true
+allowHostDirVolumePlugin: true
+allowHostNetwork: true
+allowHostIPC: false
+allowHostPID: false
+allowHostPorts: false
+readOnlyRootFilesystem: false
+runAsUser:
+  type: RunAsAny
+seLinuxContext:
+  type: RunAsAny
+users:
+- system:serviceaccount:keepalived-v6:cluster-hosted-handler
