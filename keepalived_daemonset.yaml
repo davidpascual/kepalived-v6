@@ -1,0 +1,321 @@
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: master-cluster-hosted-keepalived
+  namespace: keepalived-v6
+  labels:
+    app: cluster-hosted
+    component:  cluster-hosted-keepalived
+spec:
+  selector:
+    matchLabels:
+      name: master-cluster-hosted-keepalived
+  template:
+    metadata:
+      labels:
+        app: cluster-hosted
+        component: cluster-hosted-keepalived
+        name: master-cluster-hosted-keepalived
+    spec:
+      nodeSelector:
+        node-role.kubernetes.io/master: ""
+      tolerations:
+      - key: "node-role.kubernetes.io/master"
+        operator: "Exists"
+        effect: "NoSchedule"
+      hostNetwork: true
+      serviceAccountName: cluster-hosted-keepalived
+      volumes:
+      - name: template-dir
+        configMap:
+          name: keepalived-template
+          items:
+          - key: "master-keepalived.conf.tmpl"
+            path: "master-keepalived.conf.tmpl"
+      - name: run-dir
+        empty-dir: {}
+      - name: tmp-dir
+        empty-dir: {}
+      - name: script-dir
+        empty-dir: {}      
+      - name: conf-dir
+        empty-dir: {}
+      - name: chroot-host
+        hostPath:
+          path: /
+      containers:
+      - name: keepalivedv6
+        securityContext:
+          privileged: true
+          readOnlyRootFilesystem: true
+        # TODO: Get the image from the default keepalived pod manifest
+        image: quay.io/openshift-release-dev/ocp-v4.0-art-dev@sha256:24dbf54c5e8b6a714598b4f81b0cdcfe5b9c2be99f30dfc79a495d62b64f81cf
+        env:
+          - name: NSS_SDB_USE_CACHE
+            value: "no"
+          - name: API_VIP_V4
+            valueFrom:
+              configMapKeyRef:
+                name: user-params
+                key: api_vip_v4
+          - name: ING_VIP_V4
+            valueFrom:
+              configMapKeyRef:
+                name: user-params
+                key: ing_vip_v4
+          - name: VIRTUAL_ROUTER_ID_API 
+            valueFrom:
+              configMapKeyRef:
+                name: user-params
+                key: virtual_router_id_api
+          - name: VIRTUAL_ROUTER_ID_ING
+            valueFrom:
+              configMapKeyRef:
+                name: user-params
+                key: virtual_router_id_ing
+          - name: API_VIP_V6
+            valueFrom:
+              configMapKeyRef:
+                name: user-params
+                key: api_vip_v6
+          - name: ING_VIP_V6
+            valueFrom:
+              configMapKeyRef:
+                name: user-params
+                key: ing_vip_v6
+          - name: AUTH_PASS_API
+            valueFrom:
+              configMapKeyRef:
+                name: user-params
+                key: auth_pass_api
+          - name: AUTH_PASS_ING
+            valueFrom:
+              configMapKeyRef:
+                name: user-params
+                key: auth_pass_ing
+
+        command:
+        - /bin/bash
+        - -c
+        - |
+          #/bin/bash
+          remove_vip()
+          {
+            address=$1
+            interface=$(ip -o a | awk "/\s${address}\// {print \$2}")
+            cidr=$(ip -o a | awk "/\s${address}\// {print \$4}")
+            if [ -n "$interface" ]; then
+                ip a del $cidr dev $interface
+            fi
+          }
+          set -ex
+          # Ensure that we don't have stale VIPs configured
+          # See https://bugzilla.redhat.com/show_bug.cgi?id=1931505
+          # TODO: Replace with VIPs
+          remove_vip "$API_VIP_V6"
+          remove_vip "$ING_VIP_V6"
+          
+          sed -e "s/@API_VIP_V4/$API_VIP_V4/" /etc/template/keepalived-v6.conf.tmpl \
+             | sed -e "s/@ING_VIP_V4/$ING_VIP_V4/" \
+             | sed -e "s/@VIRTUAL_ROUTER_ID_API/$VIRTUAL_ROUTER_ID_API/" \
+             | sed -e "s/@VIRTUAL_ROUTER_ID_ING/$VIRTUAL_ROUTER_ID_ING/" \
+             | sed -e "s/@API_VIP_V6/$API_VIP_V6/" \
+             | sed -e "s/@ING_VIP_V6/$ING_VIP_V6/" \
+             | sed -e "s/@AUTH_PASS_API/$AUTH_PASS_API/" \
+             | sed -e "s/@AUTH_PASS_ING/$AUTH_PASS_ING/" > /etc/keepalived/keepalived-v6.conf
+
+          # Create iptables rule to loadbalance traffic coming in on VIP
+          if ! ip6tables -L PREROUTING -t nat | grep OCP_API_LB_REDIRECT; then
+            ip6tables -A PREROUTING  -t nat --dst $API_VIP_V6 -p tcp --dport 6443 -j REDIRECT --to-ports 9445 -m comment --comment OCP_API_LB_REDIRECT
+          fi
+          if ! ip6tables -L OUTPUT -t nat | grep OCP_API_LB_REDIRECT; then
+            ip6tables -A OUTPUT -t nat --dst $API_VIP_V6 -p tcp --dport 6443 -j REDIRECT --to-ports 9445 -m comment --comment OCP_API_LB_REDIRECT -o lo
+          fi
+
+          if [ -s "/etc/keepalived/keepalived-v6.conf" ]; then
+              /usr/sbin/keepalived -f /etc/keepalived/keepalived-v6.conf --dont-fork --vrrp --log-detail --log-console 
+          fi
+        resources:
+          requests:
+            cpu: 100m
+            memory: 200Mi
+        volumeMounts:
+        - name: template-dir
+          mountPath: /etc/template/keepalived-v6.conf.tmpl
+          subPath: master-keepalived.conf.tmpl
+
+        - name: conf-dir
+          mountPath: "/etc/keepalived"
+        - name: run-dir
+          mountPath: "/run"
+        - name: chroot-host
+          mountPath: "/host"
+        - name: tmp-dir
+          mountPath: "/tmp"
+        livenessProbe:        
+          exec:
+            command:
+            - /bin/bash
+            - -c
+            - |
+              [ ! -s "/etc/keepalived/keepalived-v6.conf" ] || (echo "State = FAULT" > /tmp/keepalived.data && kill -s SIGUSR1 "$(pgrep -o keepalived)" && for i in $(seq 5); do grep -q "State = FAULT" /tmp/keepalived.data && sleep 1 || exit 0; done && exit 1)
+          initialDelaySeconds: 20
+          timeoutSeconds: 5
+        terminationMessagePolicy: FallbackToLogsOnError
+        imagePullPolicy: IfNotPresent
+
+---
+
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: worker-cluster-hosted-keepalived
+  namespace: keepalived-v6
+  labels:
+    app: cluster-hosted
+    component:  cluster-hosted-keepalived
+spec:
+  selector:
+    matchLabels:
+      name: worker-cluster-hosted-keepalived
+  template:
+    metadata:
+      labels:
+        app: cluster-hosted
+        component: cluster-hosted-keepalived
+        name: worker-cluster-hosted-keepalived
+    spec:
+      nodeSelector:
+        node-role.kubernetes.io/worker: ""
+      hostNetwork: true
+      serviceAccountName: cluster-hosted-keepalived
+      volumes:
+      - name: template-dir
+        configMap:
+          name: keepalived-template
+          items:
+          - key: "worker-keepalived.conf.tmpl"
+            path: "worker-keepalived.conf.tmpl"
+      - name: run-dir
+        empty-dir: {}
+      - name: tmp-dir
+        empty-dir: {}
+      - name: script-dir
+        empty-dir: {}      
+      - name: conf-dir
+        empty-dir: {}
+      - name: chroot-host
+        hostPath:
+          path: /
+      containers:
+      - name: keepalivedv6
+        securityContext:
+          privileged: true
+          readOnlyRootFilesystem: true
+        # TODO: Get the image from the default keepalived pod manifest
+        image: quay.io/openshift-release-dev/ocp-v4.0-art-dev@sha256:24dbf54c5e8b6a714598b4f81b0cdcfe5b9c2be99f30dfc79a495d62b64f81cf
+        env:
+          - name: NSS_SDB_USE_CACHE
+            value: "no"
+          - name: API_VIP_V4
+            valueFrom:
+              configMapKeyRef:
+                name: user-params
+                key: api_vip_v4
+          - name: ING_VIP_V4
+            valueFrom:
+              configMapKeyRef:
+                name: user-params
+                key: ing_vip_v4
+          - name: VIRTUAL_ROUTER_ID_API 
+            valueFrom:
+              configMapKeyRef:
+                name: user-params
+                key: virtual_router_id_api
+          - name: VIRTUAL_ROUTER_ID_ING
+            valueFrom:
+              configMapKeyRef:
+                name: user-params
+                key: virtual_router_id_ing
+          - name: API_VIP_V6
+            valueFrom:
+              configMapKeyRef:
+                name: user-params
+                key: api_vip_v6
+          - name: ING_VIP_V6
+            valueFrom:
+              configMapKeyRef:
+                name: user-params
+                key: ing_vip_v6
+          - name: AUTH_PASS_API
+            valueFrom:
+              configMapKeyRef:
+                name: user-params
+                key: auth_pass_api
+          - name: AUTH_PASS_ING
+            valueFrom:
+              configMapKeyRef:
+                name: user-params
+                key: auth_pass_ing
+
+        command:
+        - /bin/bash
+        - -c
+        - |
+          #/bin/bash
+          remove_vip()
+          {
+            address=$1
+            interface=$(ip -o a | awk "/\s${address}\// {print \$2}")
+            cidr=$(ip -o a | awk "/\s${address}\// {print \$4}")
+            if [ -n "$interface" ]; then
+                ip a del $cidr dev $interface
+            fi
+          }
+          set -ex
+          # Ensure that we don't have stale VIPs configured
+          # See https://bugzilla.redhat.com/show_bug.cgi?id=1931505
+          # TODO: Replace with VIPs
+          remove_vip "$API_VIP_V6"
+          remove_vip "$ING_VIP_V6"
+          
+          sed -e "s/@API_VIP_V4/$API_VIP_V4/" /etc/template/keepalived-v6.conf.tmpl \
+             | sed -e "s/@ING_VIP_V4/$ING_VIP_V4/" \
+             | sed -e "s/@VIRTUAL_ROUTER_ID_API/$VIRTUAL_ROUTER_ID_API/" \
+             | sed -e "s/@VIRTUAL_ROUTER_ID_ING/$VIRTUAL_ROUTER_ID_ING/" \
+             | sed -e "s/@API_VIP_V6/$API_VIP_V6/" \
+             | sed -e "s/@ING_VIP_V6/$ING_VIP_V6/" \
+             | sed -e "s/@AUTH_PASS_API/$AUTH_PASS_API/" \
+             | sed -e "s/@AUTH_PASS_ING/$AUTH_PASS_ING/" > /etc/keepalived/keepalived-v6.conf
+
+          if [ -s "/etc/keepalived/keepalived-v6.conf" ]; then
+              /usr/sbin/keepalived -f /etc/keepalived/keepalived-v6.conf --dont-fork --vrrp --log-detail --log-console 
+          fi
+        resources:
+          requests:
+            cpu: 100m
+            memory: 200Mi
+        volumeMounts:
+        - name: template-dir
+          mountPath: /etc/template/keepalived-v6.conf.tmpl
+          subPath: worker-keepalived.conf.tmpl
+        - name: conf-dir
+          mountPath: "/etc/keepalived"
+        - name: run-dir
+          mountPath: "/run"
+        - name: chroot-host
+          mountPath: "/host"
+        - name: tmp-dir
+          mountPath: "/tmp"
+        livenessProbe:        
+          exec:
+            command:
+            - /bin/bash
+            - -c
+            - |
+              [ ! -s "/etc/keepalived/keepalived-v6.conf" ] || (echo "State = FAULT" > /tmp/keepalived.data && kill -s SIGUSR1 "$(pgrep -o keepalived)" && for i in $(seq 5); do grep -q "State = FAULT" /tmp/keepalived.data && sleep 1 || exit 0; done && exit 1)
+          initialDelaySeconds: 20
+          timeoutSeconds: 5
+        terminationMessagePolicy: FallbackToLogsOnError
+        imagePullPolicy: IfNotPresent
