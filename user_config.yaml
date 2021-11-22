@@ -12,4 +12,6 @@ data:
   ing_vip_v6: "fd2e:6f44:5dd8:c956::4"
   auth_pass_api: "ostest_api_vip"
   auth_pass_ing: "ostest_ingress_vip"
+  # FIXME: Unused?
   keepalived_image_name: "quay.io/openshift-release-dev/ocp-v4.0-art-dev@sha256:24dbf54c5e8b6a714598b4f81b0cdcfe5b9c2be99f30dfc79a495d62b64f81cf"
+  cluster_name: "ostest"
