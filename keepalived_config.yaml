@@ -12,7 +12,6 @@ data:
     }
 
     vrrp_script chk_api {
-      # TODO: Set to api VIP
       script "/bin/sh -c '/usr/sbin/ip a show br-ex | /usr/bin/grep -q @API_VIP_V4/32'"
       interval 2
       weight 20
@@ -21,7 +20,6 @@ data:
     }
 
     vrrp_script chk_ingress {
-        # TODO: Set to ingress VIP
         script "/bin/sh -c '/usr/sbin/ip a show br-ex | /usr/bin/grep -q @ING_VIP_V4/32'"
         interval 2
         weight 20
@@ -29,22 +27,18 @@ data:
         fall 1
     }
 
-    # TODO: Update with cluster name
-    vrrp_instance ostest_API {
+    vrrp_instance @CLUSTER_NAME_API {
         state BACKUP
         interface br-ex
-        # TODO: Make sure this doesn't conflict
         virtual_router_id @VIRTUAL_ROUTER_ID_API
         priority 40
         advert_int 1
 
         authentication {
             auth_type PASS
-            # TODO: Update with cluster name
             auth_pass @AUTH_PASS_API
         }
         virtual_ipaddress {
-            # TODO: Set to API VIP
             @API_VIP_V6/128
         }
         track_script {
@@ -52,22 +46,18 @@ data:
         }
     }
 
-    # TODO: Update with cluster name
-    vrrp_instance ostest_INGRESS {
+    vrrp_instance @CLUSTER_NAME_INGRESS {
         state BACKUP
         interface br-ex
-        # TODO: Make sure this doesn't conflict
         virtual_router_id @VIRTUAL_ROUTER_ID_ING
         priority 20
         advert_int 1
 
         authentication {
             auth_type PASS
-            # TODO: Update with cluster name
             auth_pass @AUTH_PASS_ING
         }
         virtual_ipaddress {
-            # TODO: Set to ingress VIP
             @ING_VIP_V6/128
         }
         track_script {
@@ -82,7 +72,6 @@ data:
     }
 
     vrrp_script chk_ingress {
-        # TODO: Set to ingress VIP
         script "/bin/sh -c '/usr/sbin/ip a show br-ex | /usr/bin/grep -q @ING_VIP_V4/32'"
         interval 2
         weight 20
@@ -90,22 +79,18 @@ data:
         fall 1
     }
 
-    # TODO: Update with cluster name
-    vrrp_instance ostest_INGRESS {
+    vrrp_instance @CLUSTER_NAME_INGRESS {
         state BACKUP
         interface br-ex
-        # TODO: Make sure this doesn't conflict
         virtual_router_id @VIRTUAL_ROUTER_ID_ING
         priority 20
         advert_int 1
 
         authentication {
             auth_type PASS
-            # TODO: Update with cluster name
             auth_pass @AUTH_PASS_ING
         }
         virtual_ipaddress {
-            # TODO: Set to ingress VIP
             @ING_VIP_V6/128
         }
         track_script {

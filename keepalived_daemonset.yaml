@@ -94,6 +94,11 @@ spec:
               configMapKeyRef:
                 name: user-params
                 key: auth_pass_ing
+          - name: CLUSTER_NAME
+            valueFrom:
+              configMapKeyRef:
+                name: user-params
+                key: cluster_name
 
         command:
         - /bin/bash
@@ -112,7 +117,6 @@ spec:
           set -ex
           # Ensure that we don't have stale VIPs configured
           # See https://bugzilla.redhat.com/show_bug.cgi?id=1931505
-          # TODO: Replace with VIPs
           remove_vip "$API_VIP_V6"
           remove_vip "$ING_VIP_V6"
           
@@ -123,7 +127,8 @@ spec:
              | sed -e "s/@API_VIP_V6/$API_VIP_V6/" \
              | sed -e "s/@ING_VIP_V6/$ING_VIP_V6/" \
              | sed -e "s/@AUTH_PASS_API/$AUTH_PASS_API/" \
-             | sed -e "s/@AUTH_PASS_ING/$AUTH_PASS_ING/" > /etc/keepalived/keepalived-v6.conf
+             | sed -e "s/@AUTH_PASS_ING/$AUTH_PASS_ING/" \
+             | sed -e "s/@CLUSTER_NAME/$CLUSTER_NAME/" > /etc/keepalived/keepalived-v6.conf
 
           # Create iptables rule to loadbalance traffic coming in on VIP
           if ! ip6tables -L PREROUTING -t nat | grep OCP_API_LB_REDIRECT; then
@@ -258,6 +263,11 @@ spec:
               configMapKeyRef:
                 name: user-params
                 key: auth_pass_ing
+          - name: CLUSTER_NAME
+            valueFrom:
+              configMapKeyRef:
+                name: user-params
+                key: cluster_name
 
         command:
         - /bin/bash
@@ -276,7 +286,6 @@ spec:
           set -ex
           # Ensure that we don't have stale VIPs configured
           # See https://bugzilla.redhat.com/show_bug.cgi?id=1931505
-          # TODO: Replace with VIPs
           remove_vip "$API_VIP_V6"
           remove_vip "$ING_VIP_V6"
           
@@ -287,7 +296,8 @@ spec:
              | sed -e "s/@API_VIP_V6/$API_VIP_V6/" \
              | sed -e "s/@ING_VIP_V6/$ING_VIP_V6/" \
              | sed -e "s/@AUTH_PASS_API/$AUTH_PASS_API/" \
-             | sed -e "s/@AUTH_PASS_ING/$AUTH_PASS_ING/" > /etc/keepalived/keepalived-v6.conf
+             | sed -e "s/@AUTH_PASS_ING/$AUTH_PASS_ING/" \
+             | sed -e "s/@CLUSTER_NAME/$CLUSTER_NAME/" > /etc/keepalived/keepalived-v6.conf
 
           if [ -s "/etc/keepalived/keepalived-v6.conf" ]; then
               /usr/sbin/keepalived -f /etc/keepalived/keepalived-v6.conf --dont-fork --vrrp --log-detail --log-console 
