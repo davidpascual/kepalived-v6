@@ -4,7 +4,7 @@ set -ex
 
 # The image can't be looked up from the config map, so we have to manually
 # insert it into the daemonset spec.
-image="$(yq -r .data.keepalived_image_name user_config.yaml)"
+image="quay.io/openshift-release-dev/ocp-v4.0-art-dev@sha256:3e96c1755163ecb2827bf4b4d1dfdabf2a125e6aeef620a0b8ba52d0c450432c"
 sed -e "s|@KEEPALIVED_IMAGE|$image|" keepalived_daemonset.tmpl > keepalived_daemonset.yaml
 
 oc apply -f ./namespace.yaml
