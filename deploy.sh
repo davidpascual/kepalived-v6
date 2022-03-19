@@ -9,7 +9,7 @@ sed -e "s|@KEEPALIVED_IMAGE|$image|" keepalived_daemonset.tmpl > keepalived_daem
 
 oc apply -f ./namespace.yaml
 oc apply -f ./user_config.yaml
-oc apply -f ./scc.yaml
+oc adm policy add-scc-to-user hostnetwork -z cluster-hosted-keepalived
 oc adm policy add-scc-to-user privileged -n keepalived-v6 -z cluster-hosted-keepalived
 oc apply -f keepalived_config.yaml
 oc apply -f keepalived_daemonset.yaml
